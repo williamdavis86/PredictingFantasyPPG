@@ -1,0 +1,823 @@
+---
+title: "Fantasy Football Points Per Game - Exploration and Analysis"
+author: "William D."
+date: "4/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Welcome to my MIS4470 (Practical Computing for Data Analysis) final project. My objective is to gain familiarity with the `nflfastR` API, improve my data cleaning/preparation skills, and improve my data modeling skills. I will be loading in data using the `nflfastR` package, creating exploratory plots using `ggplot` relating my response variable (fantasy points per game) to various independent variables that will be considered, and creating linear regression models for the Running Back (RB) and Wide Receiver (WR) positions. Also, I will create easy-to-read summary tables using the `gt` package.
+
+Some terms that you will need to be familiar with as you go through my project:
+
+*Fantasy Football*
+
+* Fantasy Football is a game that is played by NFL fans where you draft a team and set what you believe to be your optimal lineup every week. A typical lineup consists of one quarterback, two running backs, two wide receivers, one tight end, a flex (RB/WR/TE), and a defense. The goal is to defeat the league mate that you are facing every week, make it into the playoffs, and win the league.
+
+*Fantasy Points*
+
+* Fantasy points are accumulated throughout each game. In the scoring format I will be analyzing, players get one point for every 10 rushing or receiving yards, one point for every reception, and 6 points for every touchdown. I will be analyzing fantasy points per game (FPPG), which is simply the total amount of fantasy points accumulated at the end of the season divided by the amount of games that a given player appeared in. I am choosing to model fantasy points per game to avoid trying to model the random nature of injuries. 
+
+*Target Share*
+
+* A target is the event where a player is thrown the ball. Target share, then, is the percentage of all of the targets on a team that a given player received during the season. 
+
+*Air Yards Share*
+
+* Air yards are the amount of yards that the ball is in the air before either being caught or falling incomplete. For example, if a player is targeted and catches the ball 10 yards downfield and then runs for 10 more yards, then it would be considered a 20 yard catch, but only 10 air yards. Then, if a player is targeted 10 yards downfield but does not catch the ball, it is still considered 10 air yards. 
+
+## Load Libraries
+
+```{r}
+#loading NFL data
+library(nflfastR)
+library(nflreadr)
+library(nflplotR)
+
+#cleaning data
+library(tidyverse)
+
+#plotting team logos
+library(ggimage)
+
+#calculate ages
+library(eeptools)
+
+#Creating summary tables
+library(gt)
+
+#MAE
+library(MLmetrics)
+```
+
+## Loading in the Data
+
+The analysis I will conduct is going to focus on the 2020 and 2021 NFL seasons. I will load these into two separate dataframes.The field descriptions for the dataset can be found at [this link](https://www.nflfastr.com/articles/field_descriptions.html).
+
+```{r load_data}
+pbp_20 <- load_pbp(2020)
+pbp_21 <- load_pbp(2021)
+```
+
+The response variable of interest will be fantasy points per game. Fantasy football goes on during the regular season of the NFL, so I will filter the data to include the regular season only. Then, instead of play-by-play data that is supplied by the `load_pbp()` function that I used above, I am interested in data that summarizes the entire season for each player. This data can be obtained using the `calculate_player_stats()` function from `nflfastR`. 
+
+```{r yearly_stats}
+
+pbp_20 <- pbp_20 %>%
+  filter(season_type == "REG")
+
+stats_2020 <- calculate_player_stats(pbp_20, weekly = FALSE)
+stats_2020
+
+pbp_21 <- pbp_21 %>%
+  filter(season_type == "REG")
+
+
+stats_2021 <- calculate_player_stats(pbp_21, weekly = FALSE)
+stats_2021
+
+
+
+```
+
+During the EDA portion, I am planning on making plots that include team logos, colors, etc. There is a table within `nflfastR` that contains this information. I will load this information into my data using the `left_join()` function. The `decode_player_ids()` function in `nflfastr` is used to decode the player IDs in the play-by-play data set to match the IDs in the logo data set. I will eventually be joining 2021 fantasy points per game into the 2020 dataset, so I will rename the `fantasy_points_ppr` field to indicate that it is from the 2021 dataset. 
+
+```{r}
+# str(teams_colors_logos)
+stats_2020 <- stats_2020 %>%
+  left_join(teams_colors_logos, by = c("recent_team" = "team_abbr"))
+
+stats_2021 <- stats_2021 %>%
+   left_join(teams_colors_logos, by = c("recent_team" = "team_abbr")) %>% 
+   rename(fantasy_points_ppr_21 = fantasy_points_ppr)
+
+decode_player_ids(pbp_20, fast = TRUE)
+```
+
+In the interest of time, I am going to create models for the RB and WR positions only (it was getting way too long with QB and TE included). So, I need to create data frames for the WR and RB positions. The `nflreadR` package has a `load_rosters()` functions that will give us specific player name/position/team information. I will create a `player_name1` field that matches the format of `player_name` in the stats_* data frames. I'll include the head of one of these data frames so we can get an idea of what they contain. 
+
+```{r name_info}
+WR_names20 <- load_rosters(2020) %>%
+  filter(position == "WR") %>%
+  select(position, full_name, first_name, last_name, team)
+WR_names20$player_name1 <- paste(substr(WR_names20$first_name,1, 1), WR_names20$last_name, sep = ".")
+
+WR_names21 <- load_rosters(2021) %>%
+  filter(position == "WR") %>%
+  select(position, full_name, first_name, last_name, team) 
+WR_names21$player_name1 <- paste(substr(WR_names21$first_name,1, 1), WR_names21$last_name, sep = ".")
+
+RB_names20 <- load_rosters(2020) %>%
+  filter(position == "RB") %>%
+  select(position, full_name, first_name, last_name, team)
+RB_names20$player_name1 <- paste(substr(RB_names20$first_name,1, 1), RB_names20$last_name, sep = ".")
+
+RB_names21 <- load_rosters(2021) %>%
+  filter(position == "RB") %>%
+  select(position, full_name, first_name, last_name, team)
+RB_names21$player_name1 <- paste(substr(RB_names21$first_name,1, 1), RB_names21$last_name, sep = ".")
+
+head(RB_names20)
+```
+
+Now that I have separated name information for each position, I am able to split the `stats_2020` and `stats_2021` data frames by position. One issue that I've experienced with the first initial . last name format is players that have the same first initial and last name. To address this, I will attach the players team to their name field before filitering the data.
+
+```{r nameteam}
+RB_names20$nameteam <- paste(RB_names20$player_name1, RB_names20$team, sep = "")
+RB_names21$nameteam <- paste(RB_names21$player_name1, RB_names21$team, sep = "")
+
+WR_names20$nameteam <- paste(WR_names20$player_name1, WR_names20$team, sep = "")
+WR_names21$nameteam <- paste(WR_names21$player_name1, WR_names21$team, sep = "")
+
+stats_2020$nameteam <- paste(stats_2020$player_name, stats_2020$recent_team, sep = "")
+stats_2021$nameteam <- paste(stats_2021$player_name, stats_2021$recent_team, sep = "")
+```
+
+
+```{r}
+WR_names21 <- WR_names21 %>%
+  mutate(nameteam = replace(nameteam, nameteam == "D.MooreCAR", "Dj.MooreCAR")) 
+```
+
+Now that I have prepared the data to be separated by position, I will join the stats_* data frames to the names data frames. For RBs, I will filter to RBs that had more than 30 carries to filter out the players that were not being considered for fantasy lineups.  
+
+```{r RB_dfs}
+rbstats_2020 <- RB_names20 %>%
+  filter(nameteam %in% stats_2020$nameteam) %>%
+  left_join(stats_2020, by = "nameteam") %>%
+  filter(carries > 30) %>%
+  arrange(-fantasy_points_ppr)
+  
+head(rbstats_2020)
+stats_2021
+
+rbstats_2021 <- RB_names21 %>% 
+  filter(nameteam %in% stats_2021$nameteam) %>% 
+  left_join(stats_2021, by = "nameteam") %>%
+  filter(carries > 30) %>%
+  arrange(-fantasy_points_ppr_21)
+
+head(rbstats_2021)
+```
+I'll filter WRs with at least 20 receptions to filter out WRs that were never considered to be added to fantasy lineups. 
+```{r WR_dfs}
+wrstats_2020 <- WR_names20 %>%
+  filter(nameteam %in% stats_2020$nameteam) %>%
+  left_join(stats_2020, by = "nameteam") %>%
+  filter(receptions > 20) %>%
+  arrange(-fantasy_points_ppr) 
+
+head(wrstats_2020)
+wrstats_2020
+
+wrstats_2021 <- WR_names21 %>%
+  filter(nameteam %in% stats_2021$nameteam) %>% 
+  left_join(stats_2021, by = "nameteam") %>%
+  filter(receptions > 20) %>%
+  arrange(-fantasy_points_ppr_21) 
+
+head(wrstats_2021)
+```
+
+Instead of using 2020 as a train set and 2021 as a test set, I'd like to join 2021 fantasy points per game to the 2020 data set. The reason for this is because fantasy points are calculated as a function of yards, receptions, touchdowns etc. So, if I were to create a linear model for 2020 fantasy points using those metrics from 2020, I would get a nearly perfect model. My goal is to attempt to model 2021 fantasy points per game using various 2020 metrics to see how well we can model the following year's fantasy points. 
+
+```{r joining_fantasy_points}
+
+rbstats_2021 <- rbstats_2021 %>%
+  mutate(fantasy_PPG_21 = fantasy_points_ppr_21 / games) %>%
+  select(nameteam, fantasy_PPG_21)
+
+wrstats_2021 <- wrstats_2021 %>%
+  mutate(fantasy_PPG_21 = fantasy_points_ppr_21 / games) %>%
+  select(nameteam, fantasy_PPG_21)
+
+rbstats_2020 <- rbstats_2020 %>%
+  left_join(rbstats_2021, by = "nameteam") %>%
+  mutate(fantasy_PPG_last_yr = fantasy_points_ppr / games) 
+
+wrstats_2020 <- wrstats_2020 %>%
+  left_join(wrstats_2021, by = "nameteam") %>%
+  mutate(fantasy_PPG_last_yr = fantasy_points_ppr / games)
+
+head(wrstats_2020)
+
+
+```
+
+Later in this analysis, we will find out that many of the explanatory variables we will try to use are highly correlated. Because of this, I would like to introduce player age, height, and weight to the data set as potential explanatory variables. We can obtain age/height/weight information using the `fast_scraper_roster()` function from the `nflfastR` package. I will use the `age_calc()` function to calculate the players age as of the end of the 2021 NFL season, which was on January 9, 2022. The heights and weights are loaded in as character data, so I will convert them to numeric. 
+
+```{r age_height_Weight}
+RB_age_ht_wt <- fast_scraper_roster(2021) %>%
+  filter(position == "RB", full_name %in% rbstats_2020$full_name) %>% 
+  select(full_name, birth_date, height, weight) %>% 
+  drop_na(birth_date) %>%
+  mutate(age = age_calc(birth_date, enddate = as.Date("2022-01-09"), units = "years", precise = TRUE),
+         height = as.numeric(height),
+         weight = as.numeric(weight))
+
+head(RB_age_ht_wt)
+
+WR_age_ht_wt <- fast_scraper_roster(2021) %>%
+  filter(position == "WR", full_name %in% wrstats_2020$full_name) %>% 
+  select(full_name, birth_date, height, weight) %>% 
+  drop_na(birth_date) %>%
+  mutate(age = age_calc(birth_date, enddate = as.Date("2022-01-09"), units = "years", precise = TRUE),
+         height = as.numeric(height),
+         weight = as.numeric(weight))
+
+head(WR_age_ht_wt)
+
+```
+I will now join the age, height, and weight information to my positional data frames. 
+
+```{r}
+rbstats_2020 <- rbstats_2020 %>%
+  left_join(RB_age_ht_wt, by = "full_name") %>%
+  drop_na(fantasy_PPG_21) 
+  
+
+wrstats_2020 <- wrstats_2020 %>%
+  left_join(WR_age_ht_wt, by = "full_name") %>%
+  drop_na(fantasy_PPG_21)
+```
+
+
+```{r}
+rbstats_2020 <- rbstats_2020 %>%
+  drop_na(age)
+
+wrstats_2020 <- wrstats_2020 %>%
+  drop_na(age)
+```
+
+
+## Exploratory Data Analysis
+
+The `nflfastR` package has some nice capabilities when it comes to making plots. Earlier, I joined the `teams_colors_logos` table to my data frame. This table will allow us to create plots with team logos or player headshots. I will now create some exploratory plots using 2021 fantasy points per game as the y variable with various 2020 metrics as the x value. 
+
+Naturally, the first thing we will want to ask ourself is whether or not fantasy points per game (FPPG) are consistent from year to year. That is, are a gvien years FPPG useful in predicting the following years FPPG?
+```{r EDA}
+#team logo example
+ggplot(rbstats_2020, aes(x = fantasy_PPG_last_yr, y = fantasy_PPG_21)) +
+  geom_image(aes(image = team_logo_espn), asp = 16/9, size = 0.05) + 
+  labs(x = "2020 Fantasy Points per Game", y = "2021 Fantasy Points per Game", caption = "Data: nflfastR", title = "Fantasy Points per Game: 2021 vs. 2020") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+  
+#player headshot example
+ggplot(rbstats_2020, aes(x = fantasy_PPG_last_yr, y = fantasy_PPG_21)) +
+  geom_nfl_headshots(aes(player_gsis = player_id, height = 0.1)) + 
+  labs(x = "2020 Fantasy Points per Game", y = "2021 Fantasy Points per Game", caption = "Data: nflfastR", title = "RB Fantasy Points per Game: 2021 vs. 2020") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+```
+
+Now that I've shown how to create plots with team logos or headshots, I will switch back to normal plotting in order to save time. The logo/heashot plots tend to take a while to run. Let's see if touchdowns per game in 2020 seem related to fantasy points in 2020. As I go, I will create per game metrics as needed.
+
+```{r TD_per_game}
+rbstats_2020$rushing_td_PG_20 <- rbstats_2020$rushing_tds / rbstats_2020$games
+rbstats_2020$receiving_td_PG_20 <- rbstats_2020$receiving_tds / rbstats_2020$games
+
+wrstats_2020$receiving_td_PG_20 <- wrstats_2020$receiving_tds / wrstats_2020$games
+```
+
+
+```{r RB_TD_plots}
+ggplot(rbstats_2020, aes(x = rushing_td_PG_20, y = fantasy_PPG_21)) +
+  geom_point() +
+  labs(x = "2020 Rushing TD per Game", y = "2021 Fantasy Points per Game", caption = "Data: nflfastR", title = "Running Backs: 2021 Fantasy PPG vs. 2020 Rushing TD per Game") +
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+ggplot(rbstats_2020, aes(x = receiving_td_PG_20, y = fantasy_PPG_21)) +
+  geom_point() +
+  labs(x = "2020 Receiving TD per Game", y = "2021 Fantasy Points per Game", caption = "Data: nflfastR", title = "Running Backs: 2021 Fantasy PPG vs. 2020 Receiving TD per Game") +
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+
+Neither one of these plots have a very strong trend, but rushing TD per game seems to have more of a relationship with 2021 FPPG than receiving TD per game. Let's take a look at a plot visualizing 2020 FPPG vs. receiving TD per game for WRs. 
+
+```{r WR_plot}
+ggplot(wrstats_2020, aes(x = receiving_td_PG_20, y = fantasy_PPG_21)) + 
+  geom_point() + 
+  labs(x = "2020 Receiving TD per Game", y = "2021 Fantasy PPG", title = "Wide Receivers: 2021 Fantasy PPG vs 2020 Receiving TD per Game", caption = "Data:nflfastR")+
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Again, not a very strong trend. Perhaps we shouldn't worry too much about how many touchdowns a player scored in a given year when projecting that player in fantasy football for the following season. Let's take a look at carries per game for running backs and receptions per game for both running backs and wide receivers. 
+
+```{r carries_receptions_per_game}
+rbstats_2020$carriesPG_20 <- rbstats_2020$carries / rbstats_2020$games
+rbstats_2020$receptionsPG_20 <- rbstats_2020$receptions / rbstats_2020$games
+
+wrstats_2020$receptionsPG_20 <- wrstats_2020$receptions / wrstats_2020$games
+```
+
+```{r RB_carries_receptions_PG}
+ggplot(rbstats_2020) + 
+  geom_point(aes(x = carriesPG_20, y = fantasy_PPG_21)) + 
+  labs(x = "2020 Carries per Game", y = "2021 Fantasy PPG", caption = "Data: nflfastR", title = "Running Backs: 2021 FPPG vs. 2020 Carries per Game") +
+   theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+
+ggplot(rbstats_2020) + 
+  geom_point(aes(x = receptionsPG_20, y = fantasy_PPG_21)) + 
+  labs(x = "2020 Receptions per Game", y = "2021 Fantasy PPG", caption = "Data: nflfastR", title = "Running Backs: 2021 FPPG vs. 2020 Receptions per Game") +
+   theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+
+
+  
+```
+
+Not the strongest of trends, but there appears to be more of a relationship between these metrics and 2021 FPPG than there was with the TD counts. Let's take a look at the relationship between 2020 receptions per game and 2021 FPPG for the WR position. 
+
+```{r WR_receptions_PG}
+ggplot(wrstats_2020, aes(x = receptionsPG_20, y = fantasy_PPG_21)) + 
+  geom_point() + 
+ labs(x = "2020 Receptions per Game", y = "2021 Fantasy PPG", caption = "Data: nflfastR", title = "Wide Receivers: 2021 FPPG vs. 2020 Receptions per Game") +
+   theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+```
+
+
+There appears to be a positive trend between 2020 receptions per game and 2021 FPPG for the WR position. So far, we can gather that we will likely want to include carries/receptions per game rather than touchdowns per game from 2020 when predicting 2021 FPPG. Let's take a look at some plots relating age/height/weight to FPPG for both positions. 
+
+```{r RB_age_ht_wt_plots}
+ggplot(rbstats_2020) + 
+  geom_point(aes(x = age, y = fantasy_PPG_21)) + 
+  labs(x = "Age", y = "2021 Fantasy PPG", title = "Running Backs: 2021 Fantasy PPG by Age", caption = "Data: nflfastR | Age as of the end of the 2021 NFL season") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+
+ggplot(rbstats_2020) +
+  geom_point(aes(x = weight, y = fantasy_PPG_21)) + 
+  labs(x = "Weight", y = "2021 Fantasy PPG", title = "Running Backs: 2021 Fantasy PPG by Weight", caption = "Data: nflfastR") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+ggplot(rbstats_2020) +
+  geom_point(aes(x = height, y = fantasy_PPG_21)) + 
+  labs(x = "Height", y = "2021 Fantasy PPG", title = "Running Backs: 2021 Fantasy PPG by Height", caption = "Data: nflfastR") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+```
+
+Not much of a trend for any of age/height/weight for the RB position. Perhaps a slightly positive trend with height/weight. Let's take a look at the same explanatory variables for the WR position. 
+
+```{r WR_age_ht_wt}
+ggplot(wrstats_2020) + 
+  geom_point(aes(x = age, y = fantasy_PPG_21)) + 
+  labs(x = "Age", y = "2021 Fantasy PPG", title = "Wide Receivers: 2021 Fantasy PPG by Age", caption = "Data: nflfastR | Age as of the end of the 2021 NFL season") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5)) 
+
+ggplot(wrstats_2020) +
+  geom_point(aes(x = weight, y = fantasy_PPG_21)) + 
+  labs(x = "Weight", y = "2021 Fantasy PPG", title = "Wide Receivers: 2021 Fantasy PPG by Weight", caption = "Data: nflfastR") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+ggplot(wrstats_2020) +
+  geom_point(aes(x = height, y = fantasy_PPG_21)) + 
+  labs(x = "Height", y = "2021 Fantasy PPG", title = "Wide Receivers: 2021 Fantasy PPG by Height", caption = "Data: nflfastR") + 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Again, no obvious trends. Regardless, we will try some models that include these metrics to see how they do. We will take a look at a few more per-game metrics before moving into the modeling phase. Let's take a look at rushing yards per game for RBs and receiving yards per game for both RBs and WRs. 
+
+```{r yards}
+rbstats_2020$rushing_yards_PG_20 <- rbstats_2020$rushing_yards / rbstats_2020$games
+rbstats_2020$receiving_yards_PG_20 <- rbstats_2020$receiving_yards / rbstats_2020$games
+
+wrstats_2020$receiving_yards_PG_20 <- wrstats_2020$receiving_yards / wrstats_2020$games
+```
+
+```{r RB_yards_plots}
+ggplot(rbstats_2020) + 
+  geom_point(aes(x = rushing_yards_PG_20, y = fantasy_PPG_21)) + 
+  labs(x = "2020 Rushing Yards per Game", y = "2021 Fantasy Points per Game", title = "Running Backs: 2021 Fantasy PPG by 2020 Rushing Yards per Game", caption = "Data: nflfastR") + 
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+ggplot(rbstats_2020) + 
+  geom_point(aes(x = receiving_yards_PG_20, y = fantasy_PPG_21)) + 
+  labs(x = "2020 Receiving Yards per Game", y = "2021 Fantasy Points per Game", title = "Running Backs: 2021 Fantasy PPG by 2020 Receiving Yards per Game", caption = "Data: nflfastR") + 
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+There appears to be a positive trend between these two explanatory variables and 2021 FPPG. The concern will be how correlated this explanatory variable is with other potential explanatory variables, which might lead to multicollinearity, causing a more difficult interpretation of the model. 
+
+```{r WR_yards_plot}
+ggplot(wrstats_2020) + 
+  geom_point(aes(x = receiving_yards_PG_20, y = fantasy_PPG_21)) + 
+  labs(x = "2020 Receiving Yards per Game", y = "2021 Fantasy Points per Game", title = "Wide Receivers: 2021 Fantasy PPG by 2020 Receiving Yards per Game", caption = "Data: nflfastR") + 
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+There also appears to be a positive trend between 2020 receiving yards per game and 2021 FPPG for WRs. Two more variables we will take a look at for the WR positon are air yards share and target share. 
+
+```{r WR_air_yards_and_target_shares}
+ggplot(wrstats_2020, aes(x = air_yards_share, y = fantasy_PPG_21)) +
+  geom_point() + 
+  labs(x = "2020 Air Yards Share", y = "2021 Fantasy Points per Game", title = "Wide Receivers: 2021 Fantasy PPG vs. 2020 Air Yards Share", caption = "Data: nflfastR")+ 
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+ggplot(wrstats_2020, aes(x = target_share, y = fantasy_PPG_21)) +
+  geom_point() + 
+  labs(x = "2020 Target Share", y = "2021 Fantasy Points per Game", title = "Wide Receivers: 2021 Fantasy PPG vs. 2020 Target Share", caption = "Data: nflfastR")+ 
+   theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+These two variables (mainly target share) appear to have a positive relationship with 2021 FPPG for WRs. We will definitely attempt some models that include these variables. 
+
+Now that we have taken a look at some exploratory plots, lets try some models. I may make some more per game metrics as I move forward. 
+
+## RB Models
+
+For the null model, we will predict the average FPPG for every RB. Hopefully we will be able to improve from the null model by adding explanatory variables. 
+
+```{r RB_0}
+RB_model0 <- lm(fantasy_PPG_21 ~ 1, data = rbstats_2020)
+summary(RB_model0)
+RB_MAE0 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model0$fit)
+RB_MAE0
+```
+So, if we predict the average 2021 FPPG for every RB, our mean absolute error is 4.306. That is, on average, our prediction is 4.306 points away from the true FPPG. Hopefully, we will be able to improve this by adding in some explanatory variable. The variable that seemed to show the strongest trend with 2021 FPPG was 2020 FPPG. Let's see how a model does with this variable as the lone explanatory variable. 
+
+
+```{r RB_1}
+RB_model1 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr, data = rbstats_2020)
+summary(RB_model1)
+
+MAE_RB1 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model1$fit)
+MAE_RB1
+```
+After adding 2020 FPPG as an explanatory variable, we already see a large improvement in our model. We went from an MAE of 4.3 in the null model to under 3 in this model. Let's see if we can improve by adding some more explanatory variables. Let's add 2020 carries per game and receptions per game, both of which seemed to have a positive relationship with 2021 FPPG. 
+
+```{r RB_2}
+RB_model2 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + carriesPG_20 + receptionsPG_20, data = rbstats_2020)
+summary(RB_model2)
+
+MAE_RB2 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model2$fit)
+MAE_RB2
+```
+We see a slight dip in adjusted $R^2$, but we also see a slightly lower MAE. So, this model is comparable to the last model, it is not notably better or worse. Let's see if 2020 rushing yards or receiving yards per game help improve the model. 
+
+```{r RB_3}
+RB_model3 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + carriesPG_20 + receptionsPG_20 + rushing_yards_PG_20 + receiving_yards_PG_20, data = rbstats_2020)
+summary(RB_model3)
+
+MAE_RB3 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model3$fit)
+MAE_RB3
+```
+One thing that you might notice from the last model to this one is that the sign of the coefficient on the `carriesPG_20` variable switched signs. We are likely starting to see some multicollinearity within our model, which happens when explanatory variables are highly correlated. This would make sense, as we would expect carries and yards to be highly correlated; the RBs that get more carries will pile up more yards. We can use this same idea with receptions and receiving yards. Let's see if adding in age, height, and weight improves the model at all. 
+
+```{r RB_4}
+
+RB_model4 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + carriesPG_20 + receptionsPG_20 + rushing_yards_PG_20 + receiving_yards_PG_20 + age + height + weight, data = rbstats_2020)
+summary(RB_model4)
+
+MAE_RB4 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model4$fit)
+MAE_RB4
+
+```
+This model has our lowest MAE yet. Let's try to drop some of the variables that might be causing multicollinearity issues and see if we can maintain a similar MAE.
+
+```{r RB_5}
+RB_model5 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + carriesPG_20 + receptionsPG_20 + age + height + weight, data = rbstats_2020)
+summary(RB_model5)
+
+MAE_RB5 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model5$fit)
+MAE_RB5
+```
+So, we were able to maintain a similarly effective model while also getting rid of some confusing terms. However, carries and receptions from 2020 might also be correlated with 2020 FPPG. Let's see how the model does if we drop those terms. 
+
+```{r}
+RB_model6 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + age + height + weight, data = rbstats_2020)
+summary(RB_model6)
+
+MAE_RB6 <- MAE(rbstats_2020$fantasy_PPG_21, RB_model6$fit)
+MAE_RB6
+```
+This is actually our best performing model yet. It isn't an outstanding model with an adjusted $R^2$ of 0.5361 and an MAE of 2.75, but it is an improvement from where we started. On average, we are predicting 2.75 points off the true 2021 FPPG for each player. Before moving on to WR, let's take a look at the actual vs. predicted plot for our best model. 
+
+
+```{r actual_vs_pred}
+best_RB_model <- data.frame(rbstats_2020$fantasy_PPG_21, predict(RB_model6))
+names(best_RB_model) <- c("Actual", "Predicted")
+
+ggplot(best_RB_model) + 
+  geom_point(aes(x = Actual, y = Predicted)) + 
+  geom_abline() + 
+  labs(y = "Predicted Values", x = "Actual Values", title = "Actual Fantasy PPG vs. Predicted Fantasy PPG (RBs)") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+  
+```
+```{r contant_variance}
+ggplot(data=RB_model6, aes(x = .fitted, y = .resid))+
+  geom_point() + 
+  ggtitle("Checking for Constant Variance") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Fortunately, our actual vs. predicted plot as well as our constant variance plot look pretty good. It would be nice to have the actual vs. predicted more tightly scattered around $y=x$, but overall the model does somewhat well. Before moving on, I'd like to create a table that summarizes the findings of my model. The idea is that this table format would be somewhat easy to interpret for someone who is not familiar with regression. I am going to filter to include only the top 24 RBs in 2021 fantasy points per game and include a table of their name, age, height, and weight, their PPG in 2021, as well as their predicted 2021 FPPG and the residual. This will give the audience an idea of where the model did well and where it did not do well. Given that I am very familiar with the players and the things that happened during the 2021 season, a summary table like this where I can see which players the model didn't do very well on might also give me some inspiration on more independent variables to include in the future. I will also demonstrate how to use conditional formatting in a gt table, which I will apply to the residual column. 
+
+```{r RB_summary}
+#install.packages("remotes")
+#remotes::install_github("jthomasmock/gtExtras")
+rbstats_2020$predicted_fantasy_PPG_21 <- predict(RB_model6)
+rbstats_2020$residual <- rbstats_2020$fantasy_PPG_21 - rbstats_2020$predicted_fantasy_PPG_21
+rbstats_2020$PPG_21_rank <- rank(-rbstats_2020$fantasy_PPG_21)
+
+RB_summary_table <- rbstats_2020 %>%
+  filter(PPG_21_rank <= 24) %>%
+  select(full_name, team_logo_espn, age, height, weight, fantasy_PPG_last_yr, fantasy_PPG_21, predicted_fantasy_PPG_21, residual, PPG_21_rank) %>%
+  arrange(-fantasy_PPG_21) %>%
+  gt() %>%
+  gtExtras::gt_img_rows(team_logo_espn) %>%
+  cols_label(full_name = "Player", team_logo_espn = "Team", age = "Age", height = "Height (inches)", weight = "Weight (pounds)", fantasy_PPG_last_yr = "2020 FPPG", fantasy_PPG_21 = "2021 FPPG", predicted_fantasy_PPG_21 = "Predicted 2021 FPPG", residual = "Residual", PPG_21_rank = "2021 FPPG Ranking") %>%
+  fmt_number(c(age, fantasy_PPG_last_yr, fantasy_PPG_21, predicted_fantasy_PPG_21), 
+             decimals = 2) %>%
+  tab_header(title = "RB Model Summary", subtitle = "Table includes top 24 RBs (non-rookies) in 2021 FPPG (PPR) | Data: nflfastR")
+
+#Applying conditional formatting to residual column
+RB_summary_table %>%
+  data_color(
+    columns = c(residual),
+    colors = scales::col_numeric(
+      c("#f87274", "#FFFFFF", "#f87274"),
+      domain = c(-9, 9)
+    )
+  ) # %>%
+  #gtsave("RB_summary.png")
+
+```
+
+Based on the summary table, it looks like the model does decently well on the players that arent on the very high end. We have some pretty high residuals in the top 5. For future analyses, I would like to consider independent variables such as salary and what round a player was drafted in during the NFL draft. I think these might improve the performance of the model. I would consider this model as more of a starting point in the area of predicting FPPG rather than something I would rely on when drafting a fantasy football team. RB is a high variance position from year to year and I would like to continue looking into better models in the future. Finally, to wrap up the RB portion of this project, I will create a table that displays predictions for 2022 based on the model I created.
+
+```{r RB_predictions}
+#Getting 2021 variables used in model
+rb_predictions_22 <- RB_names21 %>%
+  filter(nameteam %in% stats_2021$nameteam) %>% 
+  left_join(stats_2021, by = "nameteam") %>%
+  filter(carries > 20) %>%
+  arrange(-fantasy_points_ppr_21) %>%
+  mutate(fantasy_PPG_21 = fantasy_points_ppr_21 / games)
+
+
+#New age/height/weight df with ages as of the end of the 2022 season
+RB_age_ht_wt_22 <- fast_scraper_roster(2021) %>%
+  filter(position == "RB", full_name %in% rb_predictions_22$full_name) %>% 
+  select(full_name, birth_date, height, weight) %>% 
+    drop_na(birth_date)  %>%
+  mutate(age = age_calc(birth_date, enddate = as.Date("2023-01-08"), units = "years", precise = TRUE),
+        height = as.numeric(height),
+        weight = as.numeric(weight))
+
+#Join age/height/weight to predictions DF
+rb_predictions_22 <- rb_predictions_22 %>%
+  left_join(RB_age_ht_wt_22, by = "full_name") %>%
+  drop_na(fantasy_PPG_21)  %>%
+  rename(fantasy_PPG_last_yr = fantasy_PPG_21)
+
+
+```
+
+
+```{r RB_predicted_2022}
+rb_predictions_22$predicted_22_FPPG <- predict(RB_model6, newdata = rb_predictions_22)
+
+rb_predictions_22 <- rb_predictions_22 %>%
+  arrange(-predicted_22_FPPG)
+```
+
+
+```{r RB_22_predictions}
+rb_predictions_22 %>%
+  mutate(predicted_FPPG_rank = rank(-predicted_22_FPPG)) %>%
+  filter(predicted_FPPG_rank <= 24) %>%
+  select(full_name, team_logo_espn, age, height, weight, fantasy_PPG_last_yr, predicted_22_FPPG, predicted_FPPG_rank) %>%
+  gt() %>%
+  gtExtras::gt_img_rows(team_logo_espn) %>%
+  cols_label(full_name = "Player", team_logo_espn = "Team", age = "Age", height = "Height (inches)", weight = "Weight (pounds)", fantasy_PPG_last_yr = "2021 FPPG", predicted_22_FPPG = "Predicted 2022 FPPG", predicted_FPPG_rank = "Predicted FPPG Ranking") %>%
+  fmt_number(c(age, height, weight, fantasy_PPG_last_yr, predicted_22_FPPG), 
+             decimals = 2) %>%
+  tab_header(title = "2022 RB Prediction Summary", subtitle = "Data: nflfastR")
+```
+
+
+## WR Models
+
+Now that we made a few models and drew conclusions for the RB position, I will start making some models for the WR position. Let's start out with a null model again as a starting point. The null model will predict the average FPPG for every WR in 2021. 
+
+```{r WR_0}
+WR_model0 <- lm(fantasy_PPG_21 ~ 1, data = wrstats_2020)
+summary(WR_model0)
+
+WR_MAE0 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model0$fit)
+WR_MAE0
+```
+The WR position is more consistent than the RB position, so it makes sense that the null model does better here than the RB null model. Let's add some independent variables to see how much we can improve. I will go through the same progression as I did with the RB models. First, we will see how much improvement we get by adding in 2020 FPPG. 
+
+
+```{r WR_1}
+WR_model1 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr, data = wrstats_2020)
+summary(WR_model1)
+
+WR_MAE1 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model1$fit)
+WR_MAE1
+```
+By adding in 2020 FPPG as an independent variable, our MAE dropped all the way down to ~2.5. This is already lower than our lowest MAE RB model. Let's see how low we can get our MAE for the WR position while maintaining an explainable model. 
+
+```{r WR_2}
+WR_model2 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + receptionsPG_20, data = wrstats_2020)
+summary(WR_model2)
+
+MAE_WR2 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model2$fit)
+MAE_WR2
+```
+
+Not much improvement from the previous model when we add a receptions term to the model. Let's try a few more models. 
+
+```{r WR_3}
+WR_model3 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr +  receptionsPG_20 + receiving_yards_PG_20, data = wrstats_2020)
+summary(WR_model3)
+
+MAE_WR3 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model3$fit)
+MAE_WR3
+```
+Similar to what we experienced with the RB models, we are starting to see some multicollinearty present in the model (negative coefficient on receving yards is the opposite of what we would expect).
+
+```{r WR_4}
+WR_model4 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr +  receptionsPG_20 + receiving_yards_PG_20 + age + height + weight, data = wrstats_2020)
+summary(WR_model4)
+
+MAE_WR4 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model4$fit)
+MAE_WR4
+```
+A slight improvement on MAE, but nothing drastic. Like we did with the RB model, I will now drop the terms that appear to be highly correlated and see what the result is. 
+
+```{r WR_5}
+WR_model5 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + age + height + weight, data = wrstats_2020)
+summary(WR_model5)
+
+MAE_WR5 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model5$fit)
+MAE_WR5
+```
+
+There are a few more variables I wanted to check out before we move into summarizing our findings. One of those is air yards, which I described at the beginning of this project. I am going to take a look at air yards per game as well as air yards share for the entire season.
+
+```{r}
+wrstats_2020$receiving_air_yards_PG_last_year <- wrstats_2020$receiving_air_yards / wrstats_2020$games
+
+WR_model6 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + receiving_air_yards_PG_last_year + age + height + weight, data = wrstats_2020)
+summary(WR_model6)
+
+MAE_WR6 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model6$fit)
+MAE_WR6
+```
+Another metric that is included in my data set is air yards share, the percentage of the teams air yards a WR receives. Let's see if including this term helps. 
+
+```{r WR_7}
+WR_model7 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + air_yards_share + age + height + weight, data = wrstats_2020)
+summary(WR_model7)
+
+MAE_WR7 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model7$fit)
+MAE_WR7
+```
+
+The air yards term is statistically significant. Models 6 and 7 have almost identical performance, but I will use model 7, because I prefer the air yards share metric which is more widely used than air yards per game. The model is likely dealing with multicollinearity, considering that the coefficient on air yards share is negative. We would intuitively expect it to be positive. It would make sense for 2020 FPPG to be correlated with 2020 air yards share. One more variable I would like to try is target share, which was described at the beginning of this document. 
+
+
+```{r WR_8}
+WR_model8 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + air_yards_share + target_share + age + height + weight, data = wrstats_2020)
+summary(WR_model8)
+
+MAE_WR8 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model8$fit)
+MAE_WR8
+```
+Target share ended up being a statistically significant variable. Let's try dropping height and weight, which aren't considered significant (P-value above 0.05). 
+
+```{r WR_9}
+WR_model9 <- lm(fantasy_PPG_21 ~ fantasy_PPG_last_yr + air_yards_share + target_share + age, data = wrstats_2020)
+summary(WR_model9)
+
+MAE_WR9 <- MAE(wrstats_2020$fantasy_PPG_21, WR_model9$fit)
+MAE_WR9
+```
+There is little difference in the performance of WR models 6-9, but it is preferred to eliminate the insignificant terms if we can maintain or even improve the model. 
+
+We did not end up getting the same result as we did for the RB models where our best model was the one with the correlated terms dropped. In further analyses we could hopefully discover some more useful independent variables. This is at at least a starting point. Let's take a look at the actual vs. predicted and constant variance plot for our best WR model, model 9. 
+
+```{r}
+best_WR_model <- data.frame(wrstats_2020$fantasy_PPG_21, predict(WR_model9))
+names(best_WR_model) <- c("Actual", "Predicted")
+
+ggplot(best_WR_model) + 
+  geom_point(aes(x = Actual, y = Predicted)) + 
+  geom_abline() + 
+  labs(y = "Predicted Values", x = "Actual Values", title = "Actual Fantasy PPG vs. Predicted Fantasy PPG (WRs)") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Not too bad, but it looks like we might have some pretty large residuals at the high end like we did with the RB position. Let's take a look at the constant variance plot before we create a summary table. 
+
+
+
+```{r}
+ggplot(data=WR_model9, aes(x = .fitted, y = .resid))+
+  geom_point() + 
+  ggtitle("Checking for Constant Variance") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+The constant variance assumption seems reasonably satisfied. Let's take a look at the summary table as we did for the RB position. 
+
+```{r WR_summary}
+wrstats_2020$predicted_fantasy_PPG_21 <- predict(WR_model9)
+wrstats_2020$residual <- wrstats_2020$fantasy_PPG_21 - wrstats_2020$predicted_fantasy_PPG_21
+wrstats_2020$PPG_21_rank <- rank(-wrstats_2020$fantasy_PPG_21)
+
+WR_summary_table <- wrstats_2020 %>%
+  filter(PPG_21_rank <= 24) %>%
+  select(full_name, team_logo_espn, age, target_share, air_yards_share, fantasy_PPG_last_yr, fantasy_PPG_21, predicted_fantasy_PPG_21, residual, PPG_21_rank) %>%
+  arrange(-fantasy_PPG_21) %>%
+  gt() %>%
+  gtExtras::gt_img_rows(team_logo_espn) %>%
+  cols_label(full_name = "Player", team_logo_espn = "Team", age = "Age", target_share = "2020 Target Share", air_yards_share = "2020 Air Yards Share", fantasy_PPG_last_yr = "2020 FPPG", fantasy_PPG_21 = "2021 FPPG", predicted_fantasy_PPG_21 = "Predicted 2021 FPPG", residual = "Residual", PPG_21_rank = "2021 FPPG Ranking") %>%
+  fmt_number(c(age, fantasy_PPG_last_yr, fantasy_PPG_21, predicted_fantasy_PPG_21), 
+             decimals = 2) %>%
+  fmt_percent(columns = c(air_yards_share, target_share),
+              decimals = 2) %>%
+  tab_header(title = "WR Model Summary", subtitle = "Table includes top 24 WRs (non-rookies) in 2021 FPPG (PPR) | Data: nflfastR")
+
+#Applying conditional formatting to residual column
+WR_summary_table %>%
+  data_color(
+    columns = c(residual),
+    colors = scales::col_numeric(
+      c("#f87274", "#FFFFFF", "#f87274"),
+      domain = c(-12, 12)
+    )
+  )  # %>%
+  # gtsave("WR_summary.png")
+```
+
+One limitation of my model is that it does not include rookies since I am using 2020 data to predict 2021. In the future, I would like to either create a separate model to account for rookies, or figure out a way to incorporate rookies into the model with the other players. Like we did for the RB position, I will now create a table of predictions for the upcoming season based on 2021 data.
+
+
+```{r predicting_2022_season}
+#Getting 2021 variables used in model
+wr_predictions_22 <- WR_names21 %>%
+  filter(nameteam %in% stats_2021$nameteam) %>% 
+  left_join(stats_2021, by = "nameteam") %>%
+  filter(receptions > 20) %>%
+  arrange(-fantasy_points_ppr_21) %>%
+  mutate(fantasy_PPG_21 = fantasy_points_ppr_21 / games)
+
+
+#New age/height/weight df with ages as of the end of the 2022 season
+WR_age_ht_wt_22 <- fast_scraper_roster(2021) %>%
+  filter(position == "WR", full_name %in% wr_predictions_22$full_name) %>% 
+  select(full_name, birth_date, height, weight) %>% 
+    drop_na(birth_date)  %>%
+  mutate(age = age_calc(birth_date, enddate = as.Date("2023-01-08"), units = "years", precise = TRUE),
+        height = as.numeric(height),
+        weight = as.numeric(weight))
+
+#Join age/height/weight to predictions DF
+wr_predictions_22 <- wr_predictions_22 %>%
+  left_join(WR_age_ht_wt_22, by = "full_name") %>%
+  drop_na(fantasy_PPG_21)  %>%
+  rename(fantasy_PPG_last_yr = fantasy_PPG_21)
+
+# wr_predictions_22$receiving_air_yards_PG_last_year <- wr_predictions_22$receiving_air_yards / wr_predictions_22$games
+```
+
+```{r}
+wr_predictions_22$predicted_22_FPPG <- predict(WR_model9, newdata = wr_predictions_22)
+
+wr_predictions_22 <- wr_predictions_22 %>%
+  arrange(-predicted_22_FPPG)
+
+```
+
+```{r WR_prediction_table}
+wr_predictions_22 %>%
+  mutate(predicted_FPPG_rank = rank(-predicted_22_FPPG)) %>%
+  filter(predicted_FPPG_rank <= 24) %>%
+  select(full_name, team_logo_espn, age, target_share, air_yards_share, fantasy_PPG_last_yr, predicted_22_FPPG, predicted_FPPG_rank) %>%
+  gt() %>%
+  gtExtras::gt_img_rows(team_logo_espn) %>%
+  cols_label(full_name = "Player", team_logo_espn = "Team", age = "Age", target_share = "2021 Target Share", air_yards_share = "2021 Air Yards Share", fantasy_PPG_last_yr = "2021 FPPG", predicted_22_FPPG = "Predicted 2022 FPPG", predicted_FPPG_rank = "Predicted FPPG Ranking") %>%
+  fmt_number(c(age, fantasy_PPG_last_yr, predicted_22_FPPG), 
+             decimals = 2) %>%
+  fmt_percent(c(air_yards_share, target_share),
+              decimals = 2) %>%
+  tab_header(title = "2022 WR Prediction Summary", subtitle = "Data: nflfastR") 
+```
+
+Similar to what was said about the RB position, I would not consider this model the golden ticket to perfectly drafting the WR position in fantasy football. It does better than the RB model, but I would still consider it more of a starting point. I would like to look into more independent variables in the future. I also plan to come back to this model after the 2022 NFL season to see how it did. 
+
+## Conclusions
+
+Overall, this project was a great learning experience. In my free time, I am interested in getting further into Sports Analytics. This project was a great starting point for me in that area. I got more comfortable with the `nflfastR` package which is very convenient to conduct quick NFL analysis, I improved my skills in cleaning/preparing data with `dplyr`, plotting in `ggplot`, and I became familiar with creating regression models on sports data. I also enjoyed learning the `gt` package to create easy to read summary tables. These are convenient for sharing with friends or social media. I consider the models that I created as starting points. I wouldn't necessarily use them as my key decision making factor in a fantasy draft, but they did lead to interesting conclusions and a good learning experience. 
+
+
